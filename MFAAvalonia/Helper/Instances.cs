@@ -529,6 +529,10 @@ public static partial class Instances
                 external.UpdateExternalNotificationProvider();
                 external.EnabledExternalNotificationProviderCount = ExternalNotificationSettingsUserControlModel.EnabledExternalNotificationProviderList.Count;
 
+                external.EnabledCustom = ConfigurationManager.Current.GetValue(ConfigurationKeys.ExternalNotificationEnabledCustom, false);
+                external.CustomSuccessText = ConfigurationManager.Current.GetValue(ConfigurationKeys.ExternalNotificationCustomSuccessText, LangKeys.TaskAllCompleted.ToLocalization());
+                external.CustomFailureText = ConfigurationManager.Current.GetValue(ConfigurationKeys.ExternalNotificationCustomFailureText, LangKeys.TaskFailed.ToLocalization());
+
                 external.DingTalkToken = ConfigurationManager.Current.GetDecrypt(ConfigurationKeys.ExternalNotificationDingTalkToken, string.Empty);
                 external.DingTalkSecret = ConfigurationManager.Current.GetDecrypt(ConfigurationKeys.ExternalNotificationDingTalkSecret, string.Empty);
                 external.EmailAccount = ConfigurationManager.Current.GetDecrypt(ConfigurationKeys.ExternalNotificationEmailAccount, string.Empty);

@@ -75,10 +75,26 @@ public partial class ExternalNotificationSettingsUserControlModel : ViewModelBas
     private void ExternalNotificationSendTest()
         => ExternalNotificationHelper.ExternalNotificationAsync(LangKeys.ExternalNotificationTest.ToLocalization());
 
-    [ObservableProperty] private bool _enabledCustom;
+    [ObservableProperty]
+    private bool _enabledCustom =
+        ConfigurationManager.Current.GetValue(ConfigurationKeys.ExternalNotificationEnabledCustom, false);
 
-    [ObservableProperty] private string _customSuccessText = LangKeys.TaskAllCompleted.ToLocalization();
-    [ObservableProperty] private string _customFailureText = LangKeys.TaskFailed.ToLocalization();
+    [ObservableProperty]
+    private string _customSuccessText =
+        ConfigurationManager.Current.GetValue(ConfigurationKeys.ExternalNotificationCustomSuccessText, LangKeys.TaskAllCompleted.ToLocalization());
+
+    [ObservableProperty]
+    private string _customFailureText =
+        ConfigurationManager.Current.GetValue(ConfigurationKeys.ExternalNotificationCustomFailureText, LangKeys.TaskFailed.ToLocalization());
+
+    partial void OnEnabledCustomChanged(bool value) =>
+        ConfigurationManager.Current.SetValue(ConfigurationKeys.ExternalNotificationEnabledCustom, value);
+
+    partial void OnCustomSuccessTextChanged(string value) =>
+        ConfigurationManager.Current.SetValue(ConfigurationKeys.ExternalNotificationCustomSuccessText, value);
+
+    partial void OnCustomFailureTextChanged(string value) =>
+        ConfigurationManager.Current.SetValue(ConfigurationKeys.ExternalNotificationCustomFailureText, value);
 
     #endregion
 

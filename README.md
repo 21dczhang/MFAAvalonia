@@ -86,7 +86,7 @@ _基于 [Avalonia UI](https://github.com/AvaloniaUI/Avalonia)
 MaaFramework 项目模板已内置 MFAAvalonia，创建项目时自动配置完成。
 
 ### 方式二：手动安装
- 
+
 <details>
 <summary><b>📦 点击展开安装步骤</b></summary>
 
@@ -95,6 +95,7 @@ MaaFramework 项目模板已内置 MFAAvalonia，创建项目时自动配置完�
    从 [Releases](https://github.com/SweetSmellFox/MFAAvalonia/releases) 下载最新版本并解压
 
 2. **复制资源文件**
+
    ```
    maafw/assets/resource/* → MFAAvalonia/resource/
    maafw/assets/interface.json → MFAAvalonia/
@@ -103,6 +104,74 @@ MaaFramework 项目模板已内置 MFAAvalonia，创建项目时自动配置完�
 3. **配置 interface.json**
 
    根据下方配置说明修改 `interface.json` 文件</details>
+
+## 🛠️ 编译与发布指南
+
+### 💻 本地编译与发布
+
+在项目根目录下执行以下命令：
+
+#### 1. 恢复依赖
+
+使用仓库自带的 `NuGet.Config` 配置进行还原：
+
+```bash
+dotnet restore MFAAvalonia.Desktop/MFAAvalonia.Desktop.csproj
+```
+
+#### 2. 编译当前平台 (Release)
+
+```bash
+dotnet build MFAAvalonia.Desktop/MFAAvalonia.Desktop.csproj -c Release
+```
+
+#### 3. 发布单平台 (以 Windows x64 为例)
+
+```bash
+dotnet publish MFAAvalonia.Desktop/MFAAvalonia.Desktop.csproj -c Release -r win-x64 --self-contained
+```
+
+#### 4. 发布多平台 (脚本示例)
+
+```bash
+for rid in win-x64 win-arm64 linux-x64 linux-arm64 osx-x64 osx-arm64; do  
+  dotnet publish MFAAvalonia.Desktop/MFAAvalonia.Desktop.csproj -c Release -r $rid --self-contained
+done
+```
+
+输出路径：MFAAvalonia.Desktop/bin/AnyCPU/Release/{runtime-identifier}/publish/
+
+### 🚀 GitHub 自动发布
+
+本项目配置了 CI 工作流，检测到符合格式的 Tag 会自动构建并发布 Release。
+
+#### 1. 权限准备
+
+发布前请确保仓库设置：Settings -> Actions -> General -> 勾选 Read and write permissions -> Save。
+
+#### 2. 触发发版
+
+```bash
+git tag v0.0.1
+git push origin v0.0.1
+```
+
+#### 3. 撤销与修正 (备忘)
+
+如果需要撤销错误的提交或 Tag：
+
+```bash
+
+# 撤销本地最后一次提交并强推
+
+git reset --hard HEAD~1
+git push --force-with-lease origin main
+
+# 删除远程与本地 Tag
+
+git tag -d v0.0.1
+git push origin --delete v0.0.1
+```
 
 ## ⚙️ 配置说明
 
@@ -186,9 +255,11 @@ MaaFramework 项目模板已内置 MFAAvalonia，创建项目时自动配置完�
 ### 任务配置详解
 
 #### 外部通知
+
 - [外部通知填写指南](./docs/zh/外部通知.md)
 
 #### 自定义布局
+
 - [自定义布局说明](./docs/zh/自定义布局.md)
 
 | 字段              |   类型    |   默认值   | 说明            |
@@ -212,7 +283,7 @@ MaaFramework 项目模板已内置 MFAAvalonia，创建项目时自动配置完�
 |:------------------------|:-----------|:--------------------------|
 | `[color:颜色]...[/color]` | 文字颜色       | `[color:red]红色文字[/color]` |
 | `[b]...[/b]`            | **粗体**     | `[b]粗体文字[/b]`             |
-| `[i]...[/i]`            | *斜体*       | `[i]斜体文字[/i]`             |
+| `[i]...[/i]`            | _斜体_       | `[i]斜体文字[/i]`             |
 | `[u]...[/u]`            | <u>下划线</u> | `[u]下划线文字[/u]`            |
 | `[s]...[/s]`            | ~~删除线~~    | `[s]删除线文字[/s]`            |
 
@@ -224,12 +295,14 @@ MaaFramework 项目模板已内置 MFAAvalonia，创建项目时自动配置完�
 - **新协议**：以 **消息类型** 为键，值为字符串或字符串数组
 
 消息类型使用 MaaFramework 的节点事件常量，例如：
+
 - 识别阶段：`Node.Recognition.Starting` / `Node.Recognition.Succeeded` / `Node.Recognition.Failed`
 - 动作阶段：`Node.Action.Starting` / `Node.Action.Succeeded` / `Node.Action.Failed`
 
 新协议会按消息类型匹配并渲染到日志。
 
 **旧协议示例：**
+
 ```jsonc
 {
   "focus": {
@@ -243,10 +316,12 @@ MaaFramework 项目模板已内置 MFAAvalonia，创建项目时自动配置完�
 ```
 
 **旧协议字段说明：**
+
 - `toast`：数组长度 >= 1 时弹出 Toast；第 1 项为标题，第 2 项为内容（可省略）
 - `aborted`：为 `true` 时在 `Starting` 阶段触发中止回调（用于中断任务）
 
 **新协议示例：**
+
 ```jsonc
 {
   "focus": {
@@ -258,6 +333,7 @@ MaaFramework 项目模板已内置 MFAAvalonia，创建项目时自动配置完�
 ```
 
 **占位符与变量：**
+
 - `{key}` 会从 `details` 中替换对应字段
 - 旧协议中的日志/Toast 支持计数变量，如 `{count}`、`{++count}`、`{count++}`、`{count+1}`
 
@@ -344,6 +420,3 @@ MFAAvalonia -c 配置名称
 [![Star History Chart](https://api.star-history.com/svg?repos=SweetSmellFox/MFAAvalonia&type=Date)](https://star-history.com/#SweetSmellFox/MFAAvalonia&Date)
 
 </div>
-
-
-
