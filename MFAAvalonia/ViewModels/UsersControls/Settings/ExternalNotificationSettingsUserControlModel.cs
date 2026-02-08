@@ -73,7 +73,12 @@ public partial class ExternalNotificationSettingsUserControlModel : ViewModelBas
 #pragma warning disable CS4014 // 由于等待不会停止
     [RelayCommand]
     private void ExternalNotificationSendTest()
-        => ExternalNotificationHelper.ExternalNotificationAsync(LangKeys.ExternalNotificationTest.ToLocalization());
+    {
+        var baseMsg = EnabledCustom ? CustomSuccessText : LangKeys.ExternalNotificationTest.ToLocalization();
+        var msg = EnabledCustom ? $"{baseMsg} - 这只是一个测试 :)" : baseMsg;
+
+        ExternalNotificationHelper.ExternalNotificationAsync(msg);
+    }
 
     [ObservableProperty]
     private bool _enabledCustom =
