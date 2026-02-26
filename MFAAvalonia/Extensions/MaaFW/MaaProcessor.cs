@@ -689,6 +689,8 @@ public class MaaProcessor
     private bool UseSeparateScreenshotTasker =>
         InstanceConfiguration.GetValue(ConfigurationKeys.UseSeparateScreenshotTasker, true);
 
+    private volatile bool _screenshotTaskerRebuilding = false;
+
     private MaaTasker? GetScreenshotTasker(CancellationToken token = default)
     {
         if (!UseSeparateScreenshotTasker)
@@ -697,45 +699,68 @@ public class MaaProcessor
             return MaaTasker;
         }
 
-        // 如果已有 tasker 但 controller 断了，主动清理触发重建
+        // 检测到 controller 不健康，触发后台异步重建，本次直接返回 null
         if (_screenshotTasker != null)
         {
             var ctrl = _screenshotTasker.Controller;
             if (ctrl == null || !ctrl.IsConnected)
             {
-                LoggerHelper.Warning($"[GetScreenshotTasker] 已有 tasker 但 controller 不健康 (IsConnected={ctrl?.IsConnected}), 触发重建");
-                DisposeScreenshotTasker();
+                LoggerHelper.Warning($"[GetScreenshotTasker] controller 不健康 (IsConnected={ctrl?.IsConnected}), 触发后台异步重建");
+                DisposeScreenshotTasker(); // 清理旧的
+                TriggerScreenshotTaskerRebuildAsync(token); // 后台重建，不阻塞
+                return null; // 本次 tick 跳过，等重建完成后下次 tick 自然恢复
             }
         }
 
-        if (_screenshotTasker == null && !_isClosed)
+        // 没有 tasker 且没有在重建中，触发重建
+        if (_screenshotTasker == null && !_isClosed && !_screenshotTaskerRebuilding)
         {
-            Task<MaaTasker?> initTask;
-            lock (_screenshotTaskerInitLock)
-            {
-                _screenshotTaskerInitTask ??= InitializeScreenshotTaskerAsync(token);
-                initTask = _screenshotTaskerInitTask;
-            }
-
-            initTask.Wait(token);
-            var tasker = initTask.Result;
-
-            lock (_screenshotTaskerInitLock)
-            {
-                if (_screenshotTasker == null)
-                {
-                    _screenshotTasker = tasker;
-                }
-                _screenshotTaskerInitTask = null;
-            }
-
-            if (_screenshotTasker != null)
-                LoggerHelper.Info($"[GetScreenshotTasker] 新 _screenshotTasker 创建完成, Controller.IsConnected={_screenshotTasker.Controller?.IsConnected}");
-            else
-                LoggerHelper.Warning("[GetScreenshotTasker] 初始化后 _screenshotTasker 仍为 null");
+            TriggerScreenshotTaskerRebuildAsync(token);
+            return null; // 本次跳过
         }
 
         return _screenshotTasker;
+    }
+
+    private void TriggerScreenshotTaskerRebuildAsync(CancellationToken token = default)
+    {
+        if (_screenshotTaskerRebuilding)
+        {
+            LoggerHelper.Debug("[TriggerScreenshotTaskerRebuildAsync] 已在重建中，跳过");
+            return;
+        }
+
+        _screenshotTaskerRebuilding = true;
+        LoggerHelper.Warning("[TriggerScreenshotTaskerRebuildAsync] 启动后台异步重建...");
+
+        Task.Run(async () =>
+        {
+            try
+            {
+                var tasker = await InitializeScreenshotTaskerAsync(token);
+                lock (_screenshotTaskerInitLock)
+                {
+                    if (_screenshotTasker == null && tasker != null)
+                    {
+                        _screenshotTasker = tasker;
+                        LoggerHelper.Info($"[TriggerScreenshotTaskerRebuildAsync] 重建完成, Controller.IsConnected={tasker.Controller?.IsConnected}");
+                    }
+                    else if (tasker == null)
+                    {
+                        LoggerHelper.Warning("[TriggerScreenshotTaskerRebuildAsync] 重建失败, tasker=null");
+                    }
+                    _screenshotTaskerInitTask = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                LoggerHelper.Error($"[TriggerScreenshotTaskerRebuildAsync] 重建异常: {ex.Message}");
+            }
+            finally
+            {
+                _screenshotTaskerRebuilding = false;
+            }
+        });
     }
 
     private void DisposeScreenshotTasker()
