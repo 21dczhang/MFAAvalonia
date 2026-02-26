@@ -777,10 +777,30 @@ public class MaaProcessor
 
     private IMaaController? GetScreenshotController(bool test)
     {
-        if (test && !_isClosed)
-            TryConnectAsync(CancellationToken.None);
+        LoggerHelper.Debug($"[GetScreenshotController] test={test}, _isClosed={_isClosed}");
 
-        return GetScreenshotTasker(CancellationToken.None)?.Controller;
+        if (test && !_isClosed)
+        {
+            LoggerHelper.Debug("[GetScreenshotController] test=true 且未关闭, 调用 TryConnectAsync");
+            TryConnectAsync(CancellationToken.None);
+        }
+
+        var tasker = GetScreenshotTasker(CancellationToken.None);
+        if (tasker == null)
+        {
+            LoggerHelper.Warning("[GetScreenshotController] GetScreenshotTasker 返回 null");
+            return null;
+        }
+
+        var controller = tasker.Controller;
+        if (controller == null)
+        {
+            LoggerHelper.Warning("[GetScreenshotController] tasker.Controller=null");
+            return null;
+        }
+
+        LoggerHelper.Debug($"[GetScreenshotController] 返回 controller, IsConnected={controller.IsConnected}");
+        return controller;
     }
 
     private bool ShouldScreencapForLiveView()
@@ -818,16 +838,43 @@ public class MaaProcessor
     {
         var controller = GetScreenshotController(false);
 
-        if (controller == null || !controller.IsConnected)
+        LoggerHelper.Debug($"[PostScreencap] GetScreenshotController => {(controller == null ? "null" : $"ok, IsConnected={controller.IsConnected}")}");
+
+        if (controller == null)
+        {
+            LoggerHelper.Warning("[PostScreencap] controller=null, returning Invalid");
             return MaaJobStatus.Invalid;
+        }
+
+        if (!controller.IsConnected)
+        {
+            LoggerHelper.Warning($"[PostScreencap] controller.IsConnected=false, returning Invalid");
+            return MaaJobStatus.Invalid;
+        }
 
         try
         {
-            return controller.Screencap().Wait();
+            LoggerHelper.Debug("[PostScreencap] Calling controller.Screencap().Wait() ...");
+            var start = DateTime.Now;
+            var status = controller.Screencap().Wait();
+            var elapsed = (DateTime.Now - start).TotalMilliseconds;
+            LoggerHelper.Info($"[PostScreencap] Screencap().Wait() returned: {status} (耗时: {elapsed:F1}ms)");
+
+            if (status != MaaJobStatus.Succeeded)
+            {
+                LoggerHelper.Warning($"[PostScreencap] 截图未成功: status={status}, 耗时={elapsed:F1}ms, controller.IsConnected={controller.IsConnected}");
+            }
+
+            return status;
+        }
+        catch (TimeoutException tex)
+        {
+            LoggerHelper.Error($"[PostScreencap] !! TimeoutException: {tex.Message}");
+            return MaaJobStatus.Invalid;
         }
         catch (Exception ex)
         {
-            LoggerHelper.Warning($"PostScreencap failed: {ex.Message}");
+            LoggerHelper.Error($"[PostScreencap] !! Exception ({ex.GetType().Name}): {ex.Message}\n{ex.StackTrace}");
             return MaaJobStatus.Invalid;
         }
     }
@@ -847,36 +894,56 @@ public class MaaProcessor
     public MaaImageBuffer? GetImage(IMaaController? maaController, bool screencap = true)
     {
         if (maaController == null)
+        {
+            LoggerHelper.Warning("[GetImage] maaController=null, returning null");
             return null;
+        }
+
+        LoggerHelper.Debug($"[GetImage] 开始: screencap={screencap}, maaController.IsConnected={maaController.IsConnected}");
 
         var buffer = new MaaImageBuffer();
         try
         {
             if (screencap)
             {
+                LoggerHelper.Debug("[GetImage] 调用 maaController.Screencap().Wait() ...");
+                var start = DateTime.Now;
                 var status = maaController.Screencap().Wait();
+                var elapsed = (DateTime.Now - start).TotalMilliseconds;
+                LoggerHelper.Info($"[GetImage] Screencap().Wait() 返回: {status} (耗时: {elapsed:F1}ms)");
+
                 if (status != MaaJobStatus.Succeeded)
                 {
+                    LoggerHelper.Warning($"[GetImage] Screencap 失败: status={status}, 耗时={elapsed:F1}ms, IsConnected={maaController.IsConnected}");
                     buffer.Dispose();
                     return null;
                 }
             }
+
+            LoggerHelper.Debug("[GetImage] 调用 GetCachedImage ...");
             if (!maaController.GetCachedImage(buffer))
             {
+                LoggerHelper.Warning($"[GetImage] GetCachedImage 返回 false (缓存为空或获取失败), screencap={screencap}, IsConnected={maaController.IsConnected}");
                 buffer.Dispose();
                 return null;
             }
 
+            LoggerHelper.Debug($"[GetImage] 成功获取图像 buffer");
             return buffer;
+        }
+        catch (TimeoutException tex)
+        {
+            LoggerHelper.Error($"[GetImage] !! TimeoutException: {tex.Message}");
+            buffer.Dispose();
+            return null;
         }
         catch (Exception ex)
         {
-            LoggerHelper.Warning($"GetImage failed: {ex.Message}");
+            LoggerHelper.Error($"[GetImage] !! Exception ({ex.GetType().Name}): {ex.Message}\n{ex.StackTrace}");
             buffer.Dispose();
             return null;
         }
     }
-
     #endregion
 
     #region MaaTasker初始化
@@ -1549,21 +1616,30 @@ public class MaaProcessor
             case MaaControllerTypes.Adb:
                 if (logConfig)
                 {
-                    LoggerHelper.Info($"Name: {Config.AdbDevice.Name}");
-                    LoggerHelper.Info($"AdbPath: {Config.AdbDevice.AdbPath}");
-                    LoggerHelper.Info($"AdbSerial: {Config.AdbDevice.AdbSerial}");
-                    LoggerHelper.Info($"ScreenCap: {Config.AdbDevice.ScreenCap}");
-                    LoggerHelper.Info($"Input: {Config.AdbDevice.Input}");
-                    LoggerHelper.Info($"Config: {Config.AdbDevice.Config}");
+                    LoggerHelper.Info($"[CreateController] 创建 AdbController:");
+                    LoggerHelper.Info($"  Name:       {Config.AdbDevice.Name}");
+                    LoggerHelper.Info($"  AdbPath:    {Config.AdbDevice.AdbPath}");
+                    LoggerHelper.Info($"  AdbSerial:  {Config.AdbDevice.AdbSerial}");
+                    LoggerHelper.Info($"  ScreenCap:  {Config.AdbDevice.ScreenCap}");
+                    LoggerHelper.Info($"  Input:      {Config.AdbDevice.Input}");
+                    LoggerHelper.Info($"  Config:     {Config.AdbDevice.Config}");
                 }
 
-                return new MaaAdbController(
+                var adbAgentPath = Path.Combine(AppContext.BaseDirectory, "libs", "MaaAgentBinary");
+                var adbConfig = !string.IsNullOrWhiteSpace(Config.AdbDevice.Config) ? Config.AdbDevice.Config : "{}";
+                LoggerHelper.Debug($"[CreateController] AdbAgentBinaryPath={adbAgentPath}, exists={Directory.Exists(adbAgentPath)}");
+                LoggerHelper.Debug($"[CreateController] 最终使用 Config={adbConfig}");
+
+                var adbController = new MaaAdbController(
                     Config.AdbDevice.AdbPath,
                     Config.AdbDevice.AdbSerial,
                     Config.AdbDevice.ScreenCap, Config.AdbDevice.Input,
-                    !string.IsNullOrWhiteSpace(Config.AdbDevice.Config) ? Config.AdbDevice.Config : "{}",
-                    Path.Combine(AppContext.BaseDirectory, "libs", "MaaAgentBinary")
+                    adbConfig,
+                    adbAgentPath
                 );
+
+                LoggerHelper.Info($"[CreateController] MaaAdbController 实例创建完成, IsConnected={adbController.IsConnected}");
+                return adbController;
 
             case MaaControllerTypes.PlayCover:
                 if (logConfig)
@@ -2191,27 +2267,52 @@ public class MaaProcessor
         {
             shouldAbort = _screencapAbortLogPending;
             shouldDisconnected = _screencapDisconnectedLogPending;
-            _screencapAbortLogPending = false;
-            _screencapDisconnectedLogPending = false;
+
+            if (shouldAbort || shouldDisconnected)
+            {
+                LoggerHelper.Warning($"[TryConsumeScreencapFailureLog] 消费待处理标志: shouldAbort={shouldAbort}, shouldDisconnected={shouldDisconnected}, 消费后将重置为 false");
+                _screencapAbortLogPending = false;
+                _screencapDisconnectedLogPending = false;
+            }
+            else
+            {
+                LoggerHelper.Debug("[TryConsumeScreencapFailureLog] 无待处理标志");
+            }
+
             return shouldAbort || shouldDisconnected;
         }
     }
 
     public bool HandleScreencapStatus(MaaJobStatus status)
     {
+        var prevCount = _screencapFailedCount;
+
         if (status == MaaJobStatus.Invalid || status == MaaJobStatus.Failed)
         {
             ++_screencapFailedCount;
+            LoggerHelper.Warning($"[HandleScreencapStatus] 截图失败: status={status}, failedCount: {prevCount} => {_screencapFailedCount}, 阈值={ActionFailedLimit}");
         }
-
-        if (status == MaaJobStatus.Succeeded)
+        else if (status == MaaJobStatus.Succeeded)
         {
             _screencapFailedCount = 0;
+            if (prevCount > 0)
+                LoggerHelper.Info($"[HandleScreencapStatus] 截图恢复成功, failedCount 重置: {prevCount} => 0");
+            else
+                LoggerHelper.Debug($"[HandleScreencapStatus] 截图成功, status={status}");
+        }
+        else
+        {
+            LoggerHelper.Warning($"[HandleScreencapStatus] 未预期的 status={status}, failedCount 不变={_screencapFailedCount}");
         }
 
-        return _screencapFailedCount >= ActionFailedLimit;
-    }
+        var shouldDisconnect = _screencapFailedCount >= ActionFailedLimit;
+        if (shouldDisconnect)
+        {
+            LoggerHelper.Warning($"[HandleScreencapStatus] !! 达到断开阈值: failedCount={_screencapFailedCount} >= ActionFailedLimit={ActionFailedLimit}, 将触发断开");
+        }
 
+        return shouldDisconnect;
+    }
 
     private string? _tempResourceVersion;
 

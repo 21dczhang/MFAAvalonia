@@ -1698,47 +1698,81 @@ public partial class TaskQueueViewModel : ViewModelBase
     {
         if (Interlocked.Exchange(ref _liveViewTickInProgress, 1) == 1)
         {
+            LoggerHelper.Debug("[LiveView] Tick skipped: previous tick still in progress");
             return;
         }
+
+        var tickStart = DateTime.Now;
+        LoggerHelper.Info($"[LiveView] === Tick START at {tickStart:HH:mm:ss.fff} ===");
 
         try
         {
             if (Processor.IsClosed)
+            {
+                LoggerHelper.Warning("[LiveView] Processor.IsClosed=true, returning early");
                 return;
+            }
+
+            LoggerHelper.Info($"[LiveView] OnLiveViewTimerElapsed: IsConnected={IsConnected}, EnableLiveView={EnableLiveView}, IsLiveViewExpanded={IsLiveViewExpanded}");
 
             if (Processor.TryConsumeScreencapFailureLog(out var shouldAbort, out var shouldDisconnected))
             {
-                // UI updates must be dispatched
+                LoggerHelper.Warning($"[LiveView] TryConsumeScreencapFailureLog: shouldAbort={shouldAbort}, shouldDisconnected={shouldDisconnected}, IsConnected={IsConnected}");
                 DispatcherHelper.PostOnMainThread(() =>
                 {
                     if (shouldAbort)
                     {
+                        LoggerHelper.Warning("[LiveView] Dispatching: ScreencapTimeoutAbort UI log");
                         AddLogByKey(LangKeys.ScreencapTimeoutAbort, Brushes.OrangeRed, changeColor: false);
                     }
                     if (shouldDisconnected)
                     {
+                        LoggerHelper.Warning("[LiveView] Dispatching: ScreencapTimeoutDisconnected UI log");
                         AddLogByKey(LangKeys.ScreencapTimeoutDisconnected, Brushes.OrangeRed, changeColor: false);
                     }
                 });
             }
+            else
+            {
+                LoggerHelper.Debug("[LiveView] TryConsumeScreencapFailureLog: no failure log pending");
+            }
+
             if (!IsLiveViewExpanded)
+            {
+                LoggerHelper.Info("[LiveView] Skipped: IsLiveViewExpanded=false");
                 return;
+            }
+
             if (EnableLiveView && IsConnected)
             {
+                LoggerHelper.Info($"[LiveView] Calling PostScreencap... (Controller={CurrentController})");
+                var screencapStart = DateTime.Now;
                 var status = Processor.PostScreencap();
+                var screencapElapsed = (DateTime.Now - screencapStart).TotalMilliseconds;
+                LoggerHelper.Info($"[LiveView] PostScreencap returned: {status} (耗时: {screencapElapsed:F1}ms)");
+
                 if (status != MaaJobStatus.Succeeded)
                 {
+                    LoggerHelper.Warning($"[LiveView] PostScreencap FAILED: status={status}, IsConnected={IsConnected}, 耗时={screencapElapsed:F1}ms");
+
                     if (Processor.HandleScreencapStatus(status))
                     {
+                        LoggerHelper.Warning($"[LiveView] HandleScreencapStatus => true, calling SetConnected(false). 当前 IsConnected={IsConnected}");
                         SetConnected(false);
                         DispatcherHelper.PostOnMainThread(() =>
                         {
+                            LoggerHelper.Warning("[LiveView] Dispatching: ScreencapTimeoutDisconnected (PostScreencap failed)");
                             AddLogByKey(LangKeys.ScreencapTimeoutDisconnected, Brushes.OrangeRed, changeColor: false);
                         });
+                    }
+                    else
+                    {
+                        LoggerHelper.Warning($"[LiveView] HandleScreencapStatus => false (状态不触发断开), status={status}");
                     }
                     return;
                 }
 
+                LoggerHelper.Debug("[LiveView] Calling GetLiveViewBuffer...");
                 var buffer = Processor.GetLiveViewBuffer(false);
                 if (buffer == null)
                 {
@@ -1753,23 +1787,31 @@ public partial class TaskQueueViewModel : ViewModelBase
                         LoggerHelper.Warning($"[LiveView] 已连接但获取画面为空 (截图方式: {screencapType}, 控制器: {controllerType}). {reason}");
                         AddLog($"warn: 实时画面已连接但无法获取画面 ({screencapType}), {reason}", (IBrush?)null);
                     }
+                    else
+                    {
+                        LoggerHelper.Debug("[LiveView] GetLiveViewBuffer=null (已记录过警告，跳过重复输出)");
+                    }
                     return;
                 }
 
+                LoggerHelper.Debug($"[LiveView] GetLiveViewBuffer 成功, 调用 UpdateLiveViewImageAsync");
                 _liveViewNoImageLogged = false;
                 _ = UpdateLiveViewImageAsync(buffer);
             }
             else
             {
+                LoggerHelper.Info($"[LiveView] LiveView inactive (EnableLiveView={EnableLiveView}, IsConnected={IsConnected}), clearing image");
                 _ = UpdateLiveViewImageAsync(null);
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // ignored
+            LoggerHelper.Error($"[LiveView] !! EXCEPTION in OnLiveViewTimerElapsed: {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
         }
         finally
         {
+            var totalElapsed = (DateTime.Now - tickStart).TotalMilliseconds;
+            LoggerHelper.Info($"[LiveView] === Tick END, 总耗时: {totalElapsed:F1}ms ===");
             Interlocked.Exchange(ref _liveViewTickInProgress, 0);
         }
     }
