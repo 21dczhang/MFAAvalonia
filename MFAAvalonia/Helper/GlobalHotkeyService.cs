@@ -158,7 +158,7 @@ public static class GlobalHotkeyService
         bool localRegistered = _commands.ContainsKey(h);
         bool remoteRegistered = _server?.HasSubscription(h) == true;
         
-        LoggerHelper.Debug($"GlobalHotkeyService: 检测到按键 {h}, 本地注册={localRegistered}, 远程订阅={remoteRegistered}");
+        LoggerHelper.Warning($"GlobalHotkeyService: 检测到按键 {h}, 本地注册={localRegistered}, 远程订阅={remoteRegistered}");
         
         if (localRegistered || remoteRegistered)
         {

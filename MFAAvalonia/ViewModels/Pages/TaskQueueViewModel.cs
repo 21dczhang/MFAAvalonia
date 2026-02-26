@@ -1698,7 +1698,7 @@ public partial class TaskQueueViewModel : ViewModelBase
     {
         if (Interlocked.Exchange(ref _liveViewTickInProgress, 1) == 1)
         {
-            LoggerHelper.Debug("[LiveView] Tick skipped: previous tick still in progress");
+            LoggerHelper.Warning("[LiveView] Tick skipped: previous tick still in progress");
             return;
         }
 
@@ -1734,7 +1734,7 @@ public partial class TaskQueueViewModel : ViewModelBase
             }
             else
             {
-                LoggerHelper.Debug("[LiveView] TryConsumeScreencapFailureLog: no failure log pending");
+                LoggerHelper.Warning("[LiveView] TryConsumeScreencapFailureLog: no failure log pending");
             }
 
             if (!IsLiveViewExpanded)
@@ -1772,7 +1772,7 @@ public partial class TaskQueueViewModel : ViewModelBase
                     return;
                 }
 
-                LoggerHelper.Debug("[LiveView] Calling GetLiveViewBuffer...");
+                LoggerHelper.Warning("[LiveView] Calling GetLiveViewBuffer...");
                 var buffer = Processor.GetLiveViewBuffer(false);
                 if (buffer == null)
                 {
@@ -1789,12 +1789,12 @@ public partial class TaskQueueViewModel : ViewModelBase
                     }
                     else
                     {
-                        LoggerHelper.Debug("[LiveView] GetLiveViewBuffer=null (已记录过警告，跳过重复输出)");
+                        LoggerHelper.Warning("[LiveView] GetLiveViewBuffer=null (已记录过警告，跳过重复输出)");
                     }
                     return;
                 }
 
-                LoggerHelper.Debug($"[LiveView] GetLiveViewBuffer 成功, 调用 UpdateLiveViewImageAsync");
+                LoggerHelper.Warning($"[LiveView] GetLiveViewBuffer 成功, 调用 UpdateLiveViewImageAsync");
                 _liveViewNoImageLogged = false;
                 _ = UpdateLiveViewImageAsync(buffer);
             }

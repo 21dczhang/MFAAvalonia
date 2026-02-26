@@ -697,6 +697,17 @@ public class MaaProcessor
             return MaaTasker;
         }
 
+        // 如果已有 tasker 但 controller 断了，主动清理触发重建
+        if (_screenshotTasker != null)
+        {
+            var ctrl = _screenshotTasker.Controller;
+            if (ctrl == null || !ctrl.IsConnected)
+            {
+                LoggerHelper.Warning($"[GetScreenshotTasker] 已有 tasker 但 controller 不健康 (IsConnected={ctrl?.IsConnected}), 触发重建");
+                DisposeScreenshotTasker();
+            }
+        }
+
         if (_screenshotTasker == null && !_isClosed)
         {
             Task<MaaTasker?> initTask;
@@ -717,6 +728,11 @@ public class MaaProcessor
                 }
                 _screenshotTaskerInitTask = null;
             }
+
+            if (_screenshotTasker != null)
+                LoggerHelper.Info($"[GetScreenshotTasker] 新 _screenshotTasker 创建完成, Controller.IsConnected={_screenshotTasker.Controller?.IsConnected}");
+            else
+                LoggerHelper.Warning("[GetScreenshotTasker] 初始化后 _screenshotTasker 仍为 null");
         }
 
         return _screenshotTasker;
@@ -727,8 +743,14 @@ public class MaaProcessor
         if (_screenshotTasker == null)
             return;
 
+        LoggerHelper.Warning("[DisposeScreenshotTasker] 开始清理截图 tasker");
+
         var screenshotTasker = _screenshotTasker;
         _screenshotTasker = null;
+
+        // 清理时同步重置失败计数，避免新 tasker 继承旧的失败状态
+        ResetActionFailedCount();
+
         lock (_screenshotTaskerInitLock)
         {
             _screenshotTaskerInitTask = null;
@@ -749,6 +771,7 @@ public class MaaProcessor
         try
         {
             screenshotTasker.Dispose();
+            LoggerHelper.Warning("[DisposeScreenshotTasker] 截图 tasker 已释放");
         }
         catch (Exception ex)
         {
@@ -777,11 +800,11 @@ public class MaaProcessor
 
     private IMaaController? GetScreenshotController(bool test)
     {
-        LoggerHelper.Debug($"[GetScreenshotController] test={test}, _isClosed={_isClosed}");
+        LoggerHelper.Warning($"[GetScreenshotController] test={test}, _isClosed={_isClosed}");
 
         if (test && !_isClosed)
         {
-            LoggerHelper.Debug("[GetScreenshotController] test=true 且未关闭, 调用 TryConnectAsync");
+            LoggerHelper.Warning("[GetScreenshotController] test=true 且未关闭, 调用 TryConnectAsync");
             TryConnectAsync(CancellationToken.None);
         }
 
@@ -799,7 +822,7 @@ public class MaaProcessor
             return null;
         }
 
-        LoggerHelper.Debug($"[GetScreenshotController] 返回 controller, IsConnected={controller.IsConnected}");
+        LoggerHelper.Warning($"[GetScreenshotController] 返回 controller, IsConnected={controller.IsConnected}");
         return controller;
     }
 
@@ -838,8 +861,6 @@ public class MaaProcessor
     {
         var controller = GetScreenshotController(false);
 
-        LoggerHelper.Debug($"[PostScreencap] GetScreenshotController => {(controller == null ? "null" : $"ok, IsConnected={controller.IsConnected}")}");
-
         if (controller == null)
         {
             LoggerHelper.Warning("[PostScreencap] controller=null, returning Invalid");
@@ -848,13 +869,15 @@ public class MaaProcessor
 
         if (!controller.IsConnected)
         {
-            LoggerHelper.Warning($"[PostScreencap] controller.IsConnected=false, returning Invalid");
+            LoggerHelper.Warning($"[PostScreencap] controller.IsConnected=false, 主动清理截图 tasker 触发重建");
+            // 关键：清理掉坏掉的 screenshotTasker，下次 GetScreenshotTasker 会重建
+            if (UseSeparateScreenshotTasker)
+                DisposeScreenshotTasker();
             return MaaJobStatus.Invalid;
         }
 
         try
         {
-            LoggerHelper.Debug("[PostScreencap] Calling controller.Screencap().Wait() ...");
             var start = DateTime.Now;
             var status = controller.Screencap().Wait();
             var elapsed = (DateTime.Now - start).TotalMilliseconds;
@@ -862,7 +885,10 @@ public class MaaProcessor
 
             if (status != MaaJobStatus.Succeeded)
             {
-                LoggerHelper.Warning($"[PostScreencap] 截图未成功: status={status}, 耗时={elapsed:F1}ms, controller.IsConnected={controller.IsConnected}");
+                LoggerHelper.Warning($"[PostScreencap] 截图未成功: status={status}, 耗时={elapsed:F1}ms, IsConnected={controller.IsConnected}");
+                // 截图失败也清理，让下次重建
+                if (UseSeparateScreenshotTasker)
+                    DisposeScreenshotTasker();
             }
 
             return status;
@@ -870,11 +896,15 @@ public class MaaProcessor
         catch (TimeoutException tex)
         {
             LoggerHelper.Error($"[PostScreencap] !! TimeoutException: {tex.Message}");
+            if (UseSeparateScreenshotTasker)
+                DisposeScreenshotTasker();
             return MaaJobStatus.Invalid;
         }
         catch (Exception ex)
         {
             LoggerHelper.Error($"[PostScreencap] !! Exception ({ex.GetType().Name}): {ex.Message}\n{ex.StackTrace}");
+            if (UseSeparateScreenshotTasker)
+                DisposeScreenshotTasker();
             return MaaJobStatus.Invalid;
         }
     }
@@ -899,14 +929,14 @@ public class MaaProcessor
             return null;
         }
 
-        LoggerHelper.Debug($"[GetImage] 开始: screencap={screencap}, maaController.IsConnected={maaController.IsConnected}");
+        LoggerHelper.Warning($"[GetImage] 开始: screencap={screencap}, maaController.IsConnected={maaController.IsConnected}");
 
         var buffer = new MaaImageBuffer();
         try
         {
             if (screencap)
             {
-                LoggerHelper.Debug("[GetImage] 调用 maaController.Screencap().Wait() ...");
+                LoggerHelper.Warning("[GetImage] 调用 maaController.Screencap().Wait() ...");
                 var start = DateTime.Now;
                 var status = maaController.Screencap().Wait();
                 var elapsed = (DateTime.Now - start).TotalMilliseconds;
@@ -920,7 +950,7 @@ public class MaaProcessor
                 }
             }
 
-            LoggerHelper.Debug("[GetImage] 调用 GetCachedImage ...");
+            LoggerHelper.Warning("[GetImage] 调用 GetCachedImage ...");
             if (!maaController.GetCachedImage(buffer))
             {
                 LoggerHelper.Warning($"[GetImage] GetCachedImage 返回 false (缓存为空或获取失败), screencap={screencap}, IsConnected={maaController.IsConnected}");
@@ -928,7 +958,7 @@ public class MaaProcessor
                 return null;
             }
 
-            LoggerHelper.Debug($"[GetImage] 成功获取图像 buffer");
+            LoggerHelper.Warning($"[GetImage] 成功获取图像 buffer");
             return buffer;
         }
         catch (TimeoutException tex)
@@ -1627,8 +1657,8 @@ public class MaaProcessor
 
                 var adbAgentPath = Path.Combine(AppContext.BaseDirectory, "libs", "MaaAgentBinary");
                 var adbConfig = !string.IsNullOrWhiteSpace(Config.AdbDevice.Config) ? Config.AdbDevice.Config : "{}";
-                LoggerHelper.Debug($"[CreateController] AdbAgentBinaryPath={adbAgentPath}, exists={Directory.Exists(adbAgentPath)}");
-                LoggerHelper.Debug($"[CreateController] 最终使用 Config={adbConfig}");
+                LoggerHelper.Warning($"[CreateController] AdbAgentBinaryPath={adbAgentPath}, exists={Directory.Exists(adbAgentPath)}");
+                LoggerHelper.Warning($"[CreateController] 最终使用 Config={adbConfig}");
 
                 var adbController = new MaaAdbController(
                     Config.AdbDevice.AdbPath,
@@ -2276,7 +2306,7 @@ public class MaaProcessor
             }
             else
             {
-                LoggerHelper.Debug("[TryConsumeScreencapFailureLog] 无待处理标志");
+                LoggerHelper.Warning("[TryConsumeScreencapFailureLog] 无待处理标志");
             }
 
             return shouldAbort || shouldDisconnected;
@@ -2298,7 +2328,7 @@ public class MaaProcessor
             if (prevCount > 0)
                 LoggerHelper.Info($"[HandleScreencapStatus] 截图恢复成功, failedCount 重置: {prevCount} => 0");
             else
-                LoggerHelper.Debug($"[HandleScreencapStatus] 截图成功, status={status}");
+                LoggerHelper.Warning($"[HandleScreencapStatus] 截图成功, status={status}");
         }
         else
         {

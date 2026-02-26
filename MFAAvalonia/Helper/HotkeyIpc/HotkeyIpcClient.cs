@@ -206,11 +206,11 @@ public class HotkeyIpcClient : IDisposable
 
                 if (string.IsNullOrEmpty(line))
                 {
-                    LoggerHelper.Debug("HotkeyIpcClient: 收到空消息，连接断开");
+                    LoggerHelper.Warning("HotkeyIpcClient: 收到空消息，连接断开");
                     break;
                 }
 
-                LoggerHelper.Debug($"HotkeyIpcClient: 收到消息 - {line}");
+                LoggerHelper.Warning($"HotkeyIpcClient: 收到消息 - {line}");
                 var msg = HotkeyMessage.Deserialize(line);
                 if (msg == null) continue;
 
@@ -225,7 +225,7 @@ public class HotkeyIpcClient : IDisposable
                         break;
                     case HotkeyMessageType.HeartbeatAck:
                         // 心跳响应，连接正常
-                        LoggerHelper.Debug("HotkeyIpcClient: 收到心跳响应");
+                        LoggerHelper.Warning("HotkeyIpcClient: 收到心跳响应");
                         break;
                 }
             }
@@ -252,7 +252,7 @@ public class HotkeyIpcClient : IDisposable
                 {
                     var heartbeat = HotkeyMessage.CreateHeartbeat();
                     await WriteLineAsync(heartbeat.SerializeToJson());
-                    LoggerHelper.Debug("HotkeyIpcClient: 发送心跳");
+                    LoggerHelper.Warning("HotkeyIpcClient: 发送心跳");
                 }
             }
         }

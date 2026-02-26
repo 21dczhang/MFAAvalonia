@@ -158,7 +158,7 @@ public class HotkeyIpcServer : IDisposable
 
                 if (string.IsNullOrEmpty(line)) break;
 
-                LoggerHelper.Debug($"HotkeyIpcServer: 收到消息 - {line}");
+                LoggerHelper.Warning($"HotkeyIpcServer: 收到消息 - {line}");
                 var msg = HotkeyMessage.Deserialize(line);
                 if (msg == null) continue;
 
@@ -195,7 +195,7 @@ public class HotkeyIpcServer : IDisposable
         }
         catch (Exception ex)
         {
-            LoggerHelper.Debug($"HotkeyIpcServer: 客户端处理异常 - {ex.Message}");
+            LoggerHelper.Warning($"HotkeyIpcServer: 客户端处理异常 - {ex.Message}");
         }
         finally
         {
