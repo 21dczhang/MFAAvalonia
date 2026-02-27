@@ -76,6 +76,13 @@ public class MaaProcessor
     public const string CRITICAL = "critical:";
     public const string SUCCESS = "success:";
 
+
+    private int _screenshotControllerUnhealthyCount = 0;
+    private const int UnhealthyThreshold = 3;
+
+    private volatile bool _screenshotTaskerRebuilding = false;
+    public bool IsScreenshotTaskerRebuilding => _screenshotTaskerRebuilding;
+
     public void ClearLogs()
     {
         LogItemViewModels.Clear();
@@ -689,7 +696,6 @@ public class MaaProcessor
     private bool UseSeparateScreenshotTasker =>
         InstanceConfiguration.GetValue(ConfigurationKeys.UseSeparateScreenshotTasker, true);
 
-    private volatile bool _screenshotTaskerRebuilding = false;
 
     private MaaTasker? GetScreenshotTasker(CancellationToken token = default)
     {
@@ -699,24 +705,40 @@ public class MaaProcessor
             return MaaTasker;
         }
 
-        // 检测到 controller 不健康，触发后台异步重建，本次直接返回 null
+        // 检测 controller 健康状态，连续不健康才触发重建
         if (_screenshotTasker != null)
         {
             var ctrl = _screenshotTasker.Controller;
             if (ctrl == null || !ctrl.IsConnected)
             {
-                LoggerHelper.Warning($"[GetScreenshotTasker] controller 不健康 (IsConnected={ctrl?.IsConnected}), 触发后台异步重建");
-                DisposeScreenshotTasker(); // 清理旧的
-                TriggerScreenshotTaskerRebuildAsync(token); // 后台重建，不阻塞
-                return null; // 本次 tick 跳过，等重建完成后下次 tick 自然恢复
+                _screenshotControllerUnhealthyCount++;
+                LoggerHelper.Warning($"[GetScreenshotTasker] controller 不健康 ({_screenshotControllerUnhealthyCount}/{UnhealthyThreshold}), IsConnected={ctrl?.IsConnected}");
+
+                if (_screenshotControllerUnhealthyCount >= UnhealthyThreshold)
+                {
+                    _screenshotControllerUnhealthyCount = 0;
+                    LoggerHelper.Warning("[GetScreenshotTasker] 达到不健康阈值, 触发后台异步重建");
+                    DisposeScreenshotTasker();
+                    TriggerScreenshotTaskerRebuildAsync(token);
+                }
+                return null; // 本次 tick 跳过
+            }
+            else
+            {
+                if (_screenshotControllerUnhealthyCount > 0)
+                {
+                    LoggerHelper.Info($"[GetScreenshotTasker] controller 恢复健康, 重置不健康计数 ({_screenshotControllerUnhealthyCount} => 0)");
+                    _screenshotControllerUnhealthyCount = 0;
+                }
             }
         }
 
-        // 没有 tasker 且没有在重建中，触发重建
+        // 没有 tasker 且没有在重建中，触发异步重建
         if (_screenshotTasker == null && !_isClosed && !_screenshotTaskerRebuilding)
         {
+            LoggerHelper.Warning("[GetScreenshotTasker] _screenshotTasker=null 且未在重建, 触发后台异步重建");
             TriggerScreenshotTaskerRebuildAsync(token);
-            return null; // 本次跳过
+            return null;
         }
 
         return _screenshotTasker;
@@ -749,6 +771,12 @@ public class MaaProcessor
                     {
                         LoggerHelper.Warning("[TriggerScreenshotTaskerRebuildAsync] 重建失败, tasker=null");
                     }
+                    else
+                    {
+                        // _screenshotTasker 已被其他地方设置，释放刚创建的
+                        LoggerHelper.Warning("[TriggerScreenshotTaskerRebuildAsync] _screenshotTasker 已被设置, 释放新建的 tasker");
+                        try { tasker.Dispose(); } catch { }
+                    }
                     _screenshotTaskerInitTask = null;
                 }
             }
@@ -773,8 +801,9 @@ public class MaaProcessor
         var screenshotTasker = _screenshotTasker;
         _screenshotTasker = null;
 
-        // 清理时同步重置失败计数，避免新 tasker 继承旧的失败状态
+        // 清理时重置失败计数，避免新 tasker 继承旧的失败状态
         ResetActionFailedCount();
+        _screenshotControllerUnhealthyCount = 0;
 
         lock (_screenshotTaskerInitLock)
         {
@@ -802,6 +831,14 @@ public class MaaProcessor
         {
             LoggerHelper.Warning($"Screenshot tasker Dispose failed: {ex.Message}");
         }
+    }
+
+    public MaaImageBuffer? GetLiveViewBufferFromCache()
+    {
+        var controller = _screenshotTasker?.Controller;
+        if (controller == null || !controller.IsConnected)
+            return null;
+        return GetImage(controller, false);
     }
 
     public ObservableCollection<DragItemViewModel> TasksSource { get; private set; } =
@@ -888,21 +925,19 @@ public class MaaProcessor
 
         if (controller == null)
         {
-            LoggerHelper.Warning("[PostScreencap] controller=null, returning Invalid");
+            LoggerHelper.Warning($"[PostScreencap] controller=null (可能正在重建中 IsRebuilding={_screenshotTaskerRebuilding}), returning Invalid");
             return MaaJobStatus.Invalid;
         }
 
         if (!controller.IsConnected)
         {
-            LoggerHelper.Warning($"[PostScreencap] controller.IsConnected=false, 主动清理截图 tasker 触发重建");
-            // 关键：清理掉坏掉的 screenshotTasker，下次 GetScreenshotTasker 会重建
-            if (UseSeparateScreenshotTasker)
-                DisposeScreenshotTasker();
+            LoggerHelper.Warning($"[PostScreencap] controller.IsConnected=false, returning Invalid");
             return MaaJobStatus.Invalid;
         }
 
         try
         {
+            LoggerHelper.Debug("[PostScreencap] Calling controller.Screencap().Wait() ...");
             var start = DateTime.Now;
             var status = controller.Screencap().Wait();
             var elapsed = (DateTime.Now - start).TotalMilliseconds;
@@ -910,10 +945,7 @@ public class MaaProcessor
 
             if (status != MaaJobStatus.Succeeded)
             {
-                LoggerHelper.Warning($"[PostScreencap] 截图未成功: status={status}, 耗时={elapsed:F1}ms, IsConnected={controller.IsConnected}");
-                // 截图失败也清理，让下次重建
-                if (UseSeparateScreenshotTasker)
-                    DisposeScreenshotTasker();
+                LoggerHelper.Warning($"[PostScreencap] 截图未成功: status={status}, 耗时={elapsed:F1}ms, controller.IsConnected={controller.IsConnected}");
             }
 
             return status;
@@ -921,15 +953,11 @@ public class MaaProcessor
         catch (TimeoutException tex)
         {
             LoggerHelper.Error($"[PostScreencap] !! TimeoutException: {tex.Message}");
-            if (UseSeparateScreenshotTasker)
-                DisposeScreenshotTasker();
             return MaaJobStatus.Invalid;
         }
         catch (Exception ex)
         {
             LoggerHelper.Error($"[PostScreencap] !! Exception ({ex.GetType().Name}): {ex.Message}\n{ex.StackTrace}");
-            if (UseSeparateScreenshotTasker)
-                DisposeScreenshotTasker();
             return MaaJobStatus.Invalid;
         }
     }

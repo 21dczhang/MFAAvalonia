@@ -1698,7 +1698,7 @@ public partial class TaskQueueViewModel : ViewModelBase
     {
         if (Interlocked.Exchange(ref _liveViewTickInProgress, 1) == 1)
         {
-            LoggerHelper.Warning("[LiveView] Tick skipped: previous tick still in progress");
+            LoggerHelper.Debug("[LiveView] Tick skipped: previous tick still in progress");
             return;
         }
 
@@ -1717,24 +1717,14 @@ public partial class TaskQueueViewModel : ViewModelBase
 
             if (Processor.TryConsumeScreencapFailureLog(out var shouldAbort, out var shouldDisconnected))
             {
-                LoggerHelper.Warning($"[LiveView] TryConsumeScreencapFailureLog: shouldAbort={shouldAbort}, shouldDisconnected={shouldDisconnected}, IsConnected={IsConnected}");
+                LoggerHelper.Warning($"[LiveView] TryConsumeScreencapFailureLog: shouldAbort={shouldAbort}, shouldDisconnected={shouldDisconnected}");
                 DispatcherHelper.PostOnMainThread(() =>
                 {
                     if (shouldAbort)
-                    {
-                        LoggerHelper.Warning("[LiveView] Dispatching: ScreencapTimeoutAbort UI log");
                         AddLogByKey(LangKeys.ScreencapTimeoutAbort, Brushes.OrangeRed, changeColor: false);
-                    }
                     if (shouldDisconnected)
-                    {
-                        LoggerHelper.Warning("[LiveView] Dispatching: ScreencapTimeoutDisconnected UI log");
                         AddLogByKey(LangKeys.ScreencapTimeoutDisconnected, Brushes.OrangeRed, changeColor: false);
-                    }
                 });
-            }
-            else
-            {
-                LoggerHelper.Warning("[LiveView] TryConsumeScreencapFailureLog: no failure log pending");
             }
 
             if (!IsLiveViewExpanded)
@@ -1755,13 +1745,19 @@ public partial class TaskQueueViewModel : ViewModelBase
                 {
                     LoggerHelper.Warning($"[LiveView] PostScreencap FAILED: status={status}, IsConnected={IsConnected}, 耗时={screencapElapsed:F1}ms");
 
+                    // 重建中时跳过失败计数，避免误触发断开
+                    if (Processor.IsScreenshotTaskerRebuilding)
+                    {
+                        LoggerHelper.Info("[LiveView] 截图 tasker 重建中，跳过失败计数");
+                        return;
+                    }
+
                     if (Processor.HandleScreencapStatus(status))
                     {
-                        LoggerHelper.Warning($"[LiveView] HandleScreencapStatus => true, calling SetConnected(false). 当前 IsConnected={IsConnected}");
+                        LoggerHelper.Warning($"[LiveView] HandleScreencapStatus => true, calling SetConnected(false)");
                         SetConnected(false);
                         DispatcherHelper.PostOnMainThread(() =>
                         {
-                            LoggerHelper.Warning("[LiveView] Dispatching: ScreencapTimeoutDisconnected (PostScreencap failed)");
                             AddLogByKey(LangKeys.ScreencapTimeoutDisconnected, Brushes.OrangeRed, changeColor: false);
                         });
                     }
@@ -1772,8 +1768,9 @@ public partial class TaskQueueViewModel : ViewModelBase
                     return;
                 }
 
-                LoggerHelper.Warning("[LiveView] Calling GetLiveViewBuffer...");
-                var buffer = Processor.GetLiveViewBuffer(false);
+                // 复用同一个 screenshotTasker 的缓存，不重新获取 controller
+                LoggerHelper.Debug("[LiveView] Calling GetLiveViewBufferFromCache...");
+                var buffer = Processor.GetLiveViewBufferFromCache();
                 if (buffer == null)
                 {
                     if (!_liveViewNoImageLogged)
@@ -1787,14 +1784,10 @@ public partial class TaskQueueViewModel : ViewModelBase
                         LoggerHelper.Warning($"[LiveView] 已连接但获取画面为空 (截图方式: {screencapType}, 控制器: {controllerType}). {reason}");
                         AddLog($"warn: 实时画面已连接但无法获取画面 ({screencapType}), {reason}", (IBrush?)null);
                     }
-                    else
-                    {
-                        LoggerHelper.Warning("[LiveView] GetLiveViewBuffer=null (已记录过警告，跳过重复输出)");
-                    }
                     return;
                 }
 
-                LoggerHelper.Warning($"[LiveView] GetLiveViewBuffer 成功, 调用 UpdateLiveViewImageAsync");
+                LoggerHelper.Debug("[LiveView] GetLiveViewBufferFromCache 成功, 调用 UpdateLiveViewImageAsync");
                 _liveViewNoImageLogged = false;
                 _ = UpdateLiveViewImageAsync(buffer);
             }
