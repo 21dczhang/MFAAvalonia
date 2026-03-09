@@ -1687,6 +1687,7 @@ public partial class TaskQueueViewModel : ViewModelBase
     private readonly System.Timers.Timer _liveViewTimer;
     private int _liveViewTickInProgress;
     private bool _liveViewNoImageLogged;
+    private bool _liveViewRecoveryPending;
 
     private void UpdateLiveViewTimerInterval()
     {
@@ -1744,6 +1745,7 @@ public partial class TaskQueueViewModel : ViewModelBase
                 if (status != MaaJobStatus.Succeeded)
                 {
                     LoggerHelper.Warning($"[LiveView] PostScreencap FAILED: status={status}, IsConnected={IsConnected}, 耗时={screencapElapsed:F1}ms");
+                    _liveViewRecoveryPending = true;
 
                     // 重建中时跳过失败计数，避免误触发断开
                     if (Processor.IsScreenshotTaskerRebuilding)
@@ -1754,8 +1756,9 @@ public partial class TaskQueueViewModel : ViewModelBase
 
                     if (Processor.HandleScreencapStatus(status))
                     {
-                        LoggerHelper.Warning($"[LiveView] HandleScreencapStatus => true, calling SetConnected(false)");
-                        SetConnected(false);
+                        // 截图链路异常不等同于主连接断开，避免误把全局连接状态置为 false
+                        // 导致任务仍在执行但 UI 进入“未连接”并清空实时画面。
+                        LoggerHelper.Warning("[LiveView] HandleScreencapStatus => true, keep IsConnected unchanged");
                         DispatcherHelper.PostOnMainThread(() =>
                         {
                             AddLogByKey(LangKeys.ScreencapTimeoutDisconnected, Brushes.OrangeRed, changeColor: false);
@@ -1773,6 +1776,7 @@ public partial class TaskQueueViewModel : ViewModelBase
                 var buffer = Processor.GetLiveViewBufferFromCache();
                 if (buffer == null)
                 {
+                    _liveViewRecoveryPending = true;
                     if (!_liveViewNoImageLogged)
                     {
                         _liveViewNoImageLogged = true;
@@ -1790,10 +1794,42 @@ public partial class TaskQueueViewModel : ViewModelBase
                 LoggerHelper.Debug("[LiveView] GetLiveViewBufferFromCache 成功, 调用 UpdateLiveViewImageAsync");
                 _liveViewNoImageLogged = false;
                 _ = UpdateLiveViewImageAsync(buffer);
+
+                // 截图恢复后的首帧：补抓一帧以尽快刷新到最新画面，降低恢复可见延迟。
+                if (_liveViewRecoveryPending)
+                {
+                    _liveViewRecoveryPending = false;
+                    Processor.ResetScreencapFailureLogFlags();
+                    LoggerHelper.Info("[LiveView] Screenshot stream recovered, scheduling one extra refresh frame");
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await Task.Delay(50);
+                            if (!EnableLiveView || !IsConnected || !IsLiveViewExpanded)
+                                return;
+
+                            var recoverStatus = Processor.PostScreencap();
+                            if (recoverStatus != MaaJobStatus.Succeeded)
+                                return;
+
+                            var recoverBuffer = Processor.GetLiveViewBufferFromCache();
+                            if (recoverBuffer == null)
+                                return;
+
+                            await UpdateLiveViewImageAsync(recoverBuffer);
+                        }
+                        catch (Exception ex)
+                        {
+                            LoggerHelper.Warning($"[LiveView] Extra recovery refresh failed: {ex.Message}");
+                        }
+                    });
+                }
             }
             else
             {
                 LoggerHelper.Info($"[LiveView] LiveView inactive (EnableLiveView={EnableLiveView}, IsConnected={IsConnected}), clearing image");
+                _liveViewRecoveryPending = false;
                 _ = UpdateLiveViewImageAsync(null);
             }
         }
@@ -1878,6 +1914,8 @@ public partial class TaskQueueViewModel : ViewModelBase
     {
         OnPropertyChanged(nameof(IsLiveViewVisible));
         _liveViewNoImageLogged = false;
+        if (!value)
+            _liveViewRecoveryPending = false;
     }
 
     partial void OnLiveViewImageChanged(Bitmap? value)
